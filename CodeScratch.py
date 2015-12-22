@@ -47,7 +47,13 @@ class mongoAPI:
         x = self._c().find_one({'name':name})
         if x:
             self.data = x
-            self.data['_id'] = str(self.data['_id'])        
+            self.data['_id'] = self.data['_id']
+            
+    def ListNames(self):
+        out = []
+        for i in self._c().find():
+            out.append(i['name'])
+        return out
         
     ## Getter
     def Get(self, name):
@@ -67,8 +73,16 @@ class mongoAPI:
     
     ## Write
     def Save(self):
-        self._c().remove({'name': self.data['name']})
-        self._c().insert_one(self.data)    
+        # Case 1 -- doesn't have an _id
+        if not '_id' in self.data:
+            out = self._c().insert_one(self.data) 
+            self.data['_id'] = out.inserted_id
+        # Case 2 -- an update operation
+        else:
+            _id = self.data['_id']
+            del self.data['_id']
+            self._c().update({'_id':_id},{'$set': self.data})
+            self.data['_id'] = _id
 
 class meta_skill(mongoAPI):
     dmods = {'E':0, 'A':-1, 'H':-2, 'VH':-3}
@@ -93,17 +107,6 @@ class meta_skill(mongoAPI):
         self.data['default'] = default
         
         self.Save()
-            
-    def AddAltDefault(self, name, mod):
-        self.data['alt default'].append({'name':name, 'mod':mod})
-        self.Save()
-        
-    def Save(self):
-        client.gls.meta_skills.remove({'name': self.data['name']})
-        client.gls.meta_skills.insert_one(self.data)
-
-    def GetDefaults(self):
-        return self.data['alt default']
     
     def RelativeLevel(self, cp):
         # Compute the level from a cp allocation
@@ -124,110 +127,78 @@ class meta_skill(mongoAPI):
         
 
 
-def GetMongoClient( URI ):
-    ''' Get a Mongo Client from a particular URI
-    '''
-    # Get a client
-    if not client:
-        client = MongoClient(host=URI, port=27017)
-    
-    return client
-    
 
-
-class GLS_sheet:
-    '''
-       Interface for a character sheet.
-    '''
+class meta_attribute(mongoAPI):
     
-    def __init__(self, campaign, user='GM', secret_id=''):
-        '''
-        '''
-        # IDs
-        self.campaign = campaign
-        self._id = None
+    def __init__(self, name= ''):
+        # Parents
+        mongoAPI.__init__(self, 'meta_attributes')
         
-        # Owner
-        self.user = user
-        self.secret_id = secret_id
+        # Data
+        self.data = {'name':'',
+                     'base':10,
+                     'cost':10}
         
-        # Query for self
-        x = self.campaign.client.gls.sheet.find_one({'user':user, 'secret_id':secret_id, 'campaign_id':ObjectId(campaign.GetID())})
-        if not x:
-            self.SetupNewSheet()
-        else:
-            self.FromJSON(x)
+        if name:
+            self.Fetch(name)
             
-    def SetupNewSheet(self):
-        # Initiate the entry and recover the _id
-        self._id = str(self.campaign.client.gls.sheet.insert_one({'campaign_id':ObjectId(self.campaign.GetID()), 
-                                                              'user':self.user, 
-                                                              'secret_id': self.secret_id}).inserted_id)
-        
+    def RelativeLevel(self, cp):
+        return abs(cp) / self.data['cost'] * (self.data['cost']/abs(self.data['cost']))
     
-    def FromJSON(self, data):
-        pass
+class gls_campaign(mongoAPI):
+    
+    def __init__(self, name = ''):
+        # Parent
+        mongoAPI.__init__(self, 'campaign')
         
-        
-class GLS_campaign:
-    '''
-    '''
-    def __init__(self, client, name='debug', GM='root'):
-        '''
-        '''
-        # Logic attributes
-        self.name = name
-        self.GM   = GM
-        
-        # Database
-        self.client = client
-        
-        # Fetch of create entry
-        x = self.client.gls.campaign.find_one({'GM':GM, 'name':name})
-        if x:
-            self.FromJSON(x)
-        else:
-            # Create the instance
-            self.uid = self.client.gls.campaign.insert_one( self.AsJSON() ).inserted_id
-        
-    def AsJSON(self):
-        '''
-           Generate a JSON from an instance
-        '''
-        out = { 'name': self.name, 'GM': self.GM }
-        
+        # Data
+        self.data = {'name':name,
+                     'GM': 'root@dal.ca',
+                     'pwd': 'xxx123'}
+        if name:
+            self.Fetch(name)
+            
+    def SpawnSheet(self):
+        out = gls_sheet(self.data['_id'])
+        out.Save()
         return out
-    
-    def FromJSON(self, data):
-        # Build instance from a JSON object
-        self.name = data['name']
-        self.GM   = data['GM']
-        self.uid  = str(data['_id'])
+            
         
-    # Getter
-    def GetID(self):
-        return self.uid
+class gls_sheet(mongoAPI):
     
-    # Action
-    def GetSheet(self, owner, secret_id):
-        # Get Sheet
-        sheet = GLS_sheet(self, owner, secret_id)
-        return sheet
+    def __init__(self, campaign_id, sheet_id=None):
+        # Parent
+        mongoAPI.__init__(self, 'sheets')
         
+        # Data
+        self.data = {'name':'',
+                     'race':'human',
+                     'ethnicity':'',
+                     'age': 0,
+                     'SM' : 0,
+                     'height': '',
+                     'weight': '',
+                     'gender': '',
+                     'user': 'root@dal.ca',
+                     'pwd' : 'xxx123',
+                     'campaign_id':campaign_id}
+        
+        # Create or populate
+        if sheet_id != None:
+            # New sheet
+            x = self._c().find_one( {'_id': ObjectId(sheet_id), 'campaign_id': ObjectId(campaign_id)} )
+            if x:
+                self.data = x
+                self.data['_id'] = str( self.data['_id'] )
+
         
 if __name__ == "__main__":
     # DB client
     #client = GetMongoClient('localhost')
     
-    x = meta_skill('Administration')
-    print x
-    #x.Populate('Administration','IQ','A',-5)
-    #x.Save()
-    
-    # Create a campaign
-    #campaign = GLS_campaign(client)
-    
-    # Create a sheet
-    #sheet = campaign.GetSheet('GM', 'debug1')
+    x = gls_campaign('debug')
+    y = x.SpawnSheet()
+    print y
+
         
         
